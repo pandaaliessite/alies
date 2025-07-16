@@ -1,0 +1,1539 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Еліас: Створення Команд та Гра</title>
+    <!-- Підключення Tailwind CSS для стилізації -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where, addDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Глобальні змінні Firebase (будуть ініціалізовані пізніше)
+        window.firebaseApp = null;
+        window.db = null;
+        window.auth = null;
+        window.userId = null; // Унікальний ID користувача
+        window.appId = typeof __app_id !== 'undefined' ? __app_id : 'default-alias-app'; // Використовуємо наданий __app_id
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                // Отримання конфігурації Firebase
+                const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+                const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+                if (Object.keys(firebaseConfig).length === 0) {
+                    console.error("Firebase config is missing or empty. Please ensure __firebase_config is provided.");
+                    document.getElementById('loading-message').textContent = "Помилка: Конфігурація Firebase відсутня.";
+                    return;
+                }
+
+                window.firebaseApp = initializeApp(firebaseConfig);
+                window.db = getFirestore(window.firebaseApp);
+                window.auth = getAuth(window.firebaseApp);
+
+                // Слухаємо зміни стану автентифікації
+                onAuthStateChanged(window.auth, async (user) => {
+                    if (user) {
+                        window.userId = user.uid;
+                        console.log("Firebase Authenticated. User ID:", window.userId);
+                        document.getElementById('loading-message').style.display = 'none'; // Приховуємо завантаження
+                        loadState(); // Завантажуємо стан гри після автентифікації
+                    } else {
+                        // Якщо токен надано, спробуємо увійти з ним
+                        if (initialAuthToken) {
+                            try {
+                                await signInWithCustomToken(window.auth, initialAuthToken);
+                                console.log("Signed in with custom token.");
+                            } catch (error) {
+                                console.error("Error signing in with custom token:", error);
+                                // Якщо токен недійсний або виникла помилка, спробуємо анонімно
+                                try {
+                                    await signInAnonymously(window.auth);
+                                    console.log("Signed in anonymously after custom token failure.");
+                                } catch (anonError) {
+                                    console.error("Error signing in anonymously:", anonError);
+                                    document.getElementById('loading-message').textContent = "Помилка автентифікації Firebase.";
+                                }
+                            }
+                        } else {
+                            // Якщо токен не надано, увійдемо анонімно
+                            try {
+                                await signInAnonymously(window.auth);
+                                console.log("Signed in anonymously.");
+                            } catch (anonError) {
+                                console.error("Error signing in anonymously:", anonError);
+                                document.getElementById('loading-message').textContent = "Помилка автентифікації Firebase.";
+                            }
+                        }
+                    }
+                });
+
+            } catch (error) {
+                console.error("Failed to initialize Firebase:", error);
+                document.getElementById('loading-message').textContent = "Помилка ініціалізації Firebase.";
+            }
+        });
+    </script>
+
+    <style>
+        /* Базові стилі для тіла сторінки та контейнера додатку */
+        body {
+            font-family: 'Inter', sans-serif; /* Використання шрифту Inter */
+            background-color: #f0f4f8; /* Світло-сірий фон */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh; /* Мінімальна висота 100% від висоти вікна */
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+            transition: background-color 0.3s ease; /* Плавний перехід фону */
+        }
+        body.dark-mode {
+            background-color: #1a202c; /* Темний фон для темної теми */
+            color: #e2e8f0; /* Світлий текст для темної теми */
+        }
+        #app-container {
+            background-color: #ffffff; /* Білий фон контейнера */
+            padding: 30px;
+            border-radius: 15px; /* Заокруглені кути */
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1); /* Тінь */
+            width: 100%;
+            max-width: 700px; /* Збільшена максимальна ширина контейнера */
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            gap: 20px; /* Відстань між елементами */
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        body.dark-mode #app-container {
+            background-color: #2d3748; /* Темніший фон контейнера */
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3); /* Сильніша тінь */
+        }
+        /* Стилі для секцій, які відображаються/ховаються JavaScript'ом */
+        .section {
+            display: none; /* За замовчуванням приховані */
+            flex-direction: column;
+            gap: 15px;
+        }
+        .section.active {
+            display: flex; /* Активні секції відображаються */
+        }
+        /* Стилі для полів вводу та вибору */
+        input[type="text"], input[type="number"], select, textarea {
+            padding: 12px;
+            border: 1px solid #cbd5e0; /* Сіра рамка */
+            border-radius: 8px; /* Заокруглені кути */
+            font-size: 1rem;
+            width: 100%;
+            box-sizing: border-box; /* Включаємо padding і border у ширину */
+            transition: border-color 0.2s, background-color 0.3s, color 0.3s; /* Плавний перехід кольору рамки */
+        }
+        body.dark-mode input[type="text"],
+        body.dark-mode input[type="number"],
+        body.dark-mode select,
+        body.dark-mode textarea {
+            background-color: #4a5568; /* Темний фон для полів вводу */
+            border-color: #4a5568; /* Темна рамка */
+            color: #e2e8f0; /* Світлий текст */
+        }
+        input[type="text"]:focus, input[type="number"]:focus, select:focus, textarea:focus {
+            outline: none; /* Прибираємо стандартний outline */
+            border-color: #6366f1; /* Колір рамки при фокусі */
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2); /* Тінь при фокусі */
+        }
+        /* Стилі для кнопок */
+        button {
+            background-color: #6366f1; /* Синій фон */
+            color: white;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.2s, transform 0.1s, box-shadow 0.2s; /* Плавні переходи */
+            box-shadow: 0 4px 10px rgba(99, 102, 241, 0.3); /* Тінь кнопки */
+        }
+        button:hover {
+            background-color: #4f46e5; /* Темніший синій при наведенні */
+            transform: translateY(-1px); /* Невеликий підйом при наведенні */
+        }
+        button:disabled {
+            background-color: #a7a7a7; /* Сірий колір для неактивних кнопок */
+            cursor: not-allowed; /* Курсор "заборонено" */
+            box-shadow: none;
+        }
+        /* Стилі для списку команд */
+        .teams-columns-container {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin-top: 20px;
+        }
+        @media (min-width: 640px) { /* Tailwind's sm breakpoint */
+            .teams-columns-container {
+                flex-direction: row;
+                justify-content: space-around;
+            }
+        }
+
+        .team-list-column {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 15px; /* Spacing between team cards in a column */
+        }
+        /* Стилі для картки команди */
+        .team-card {
+            background-color: #e0e7ff; /* Світло-індиговий фон */
+            padding: 15px;
+            border-radius: 10px;
+            text-align: left;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05); /* Легка тінь */
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        body.dark-mode .team-card {
+            background-color: #4a5568; /* Темний фон для картки команди */
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        }
+        .team-card h3 {
+            font-weight: bold;
+            color: #4338ca; /* Темно-індиговий колір заголовка */
+            margin-bottom: 8px;
+            transition: color 0.3s ease;
+        }
+        body.dark-mode .team-card h3 {
+            color: #a7d9f7; /* Світліший колір заголовка в темній темі */
+        }
+        .team-card ul {
+            list-style: none; /* Прибираємо маркери списку */
+            padding: 0;
+            margin: 0;
+        }
+        .team-card ul li {
+            background-color: #c7d2fe; /* Світліший індиговий фон для елементів списку */
+            padding: 5px 10px;
+            border-radius: 5px;
+            margin-bottom: 5px;
+            font-size: 0.9rem;
+            color: #312e81; /* Темно-синій колір тексту */
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        body.dark-mode .team-card ul li {
+            background-color: #6366f1; /* Темніший індиговий фон для елементів списку */
+            color: #e2e8f0; /* Світліший текст */
+        }
+        .team-card ul li:last-child {
+            margin-bottom: 0;
+        }
+        /* Стилі для вікна повідомлень */
+        #message-box {
+            background-color: #fff3cd; /* Жовтий фон */
+            color: #856404; /* Темно-жовтий текст */
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 15px;
+            display: none; /* За замовчуванням приховане */
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        body.dark-mode #message-box {
+            background-color: #4a2d00; /* Темний жовтий фон */
+            color: #ffda8b; /* Світлий жовтий текст */
+        }
+        #message-box.active {
+            display: block; /* Активне повідомлення відображається */
+        }
+
+        /* Стилі для ігрової секції */
+        #game-section {
+            text-align: center;
+        }
+        #current-word {
+            font-size: 3.5rem; /* Великий розмір слова */
+            font-weight: bold;
+            color: #333;
+            margin: 30px 0;
+            min-height: 100px; /* Забезпечуємо місце для слова */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: #f8fafc;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: inset 0 2px 5px rgba(0,0,0,0.05);
+            transition: background-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease;
+        }
+        body.dark-mode #current-word {
+            background-color: #1a202c; /* Темний фон */
+            color: #e2e8f0; /* Світлий текст */
+            box-shadow: inset 0 2px 5px rgba(0,0,0,0.2);
+        }
+        #timer {
+            font-size: 4rem; /* Дуже великий таймер */
+            font-weight: bolder;
+            color: #ef4444; /* Червоний колір для таймера */
+            margin-bottom: 20px;
+            animation: pulse 1s infinite alternate; /* Анімація для таймера */
+        }
+        @keyframes pulse {
+            from { transform: scale(1); opacity: 1; }
+            to { transform: scale(1.05); opacity: 0.9; }
+        }
+        #current-team-turn {
+            font-size: 1.8rem;
+            font-weight: bold;
+            color: #4f46e5;
+            margin-bottom: 15px;
+            transition: color 0.3s ease;
+        }
+        body.dark-mode #current-team-turn {
+            color: #a7d9f7; /* Світліший синій для темної теми */
+        }
+        .game-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .game-buttons button {
+            flex: 1;
+            padding: 15px 25px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border-radius: 10px;
+        }
+        #correct-btn {
+            background-color: #22c55e; /* Зелений для "Вірно" */
+        }
+        #correct-btn:hover {
+            background-color: #16a34a;
+        }
+        #skip-btn {
+            background-color: #f97316; /* Помаранчевий для "Пропустити" */
+        }
+        #skip-btn:hover {
+            background-color: #ea580c;
+        }
+        #end-game-btn {
+            background-color: #dc2626; /* Червоний для "Завершити гру" */
+            margin-top: 20px;
+        }
+        #end-game-btn:hover {
+            background-color: #b91c1c;
+        }
+        #start-round-btn, #start-next-round-btn { /* Об'єднані стилі для обох кнопок початку раунду */
+            background-color: #10b981; /* Зелений для "Почати наступний раунд" */
+            margin-top: 20px;
+            display: none; /* За замовчуванням прихована */
+        }
+        #start-round-btn:hover, #start-next-round-btn:hover {
+            background-color: #059669;
+        }
+
+        /* Стилі для відображення балів команд під час гри */
+        #game-scores {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f0f4f8;
+            border-radius: 10px;
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        body.dark-mode #game-scores {
+            background-color: #1a202c; /* Темний фон для рахунків */
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.3);
+        }
+        .game-score-item {
+            font-size: 1.1rem;
+            font-weight: bold;
+            color: #444;
+            transition: color 0.3s ease;
+        }
+        body.dark-mode .game-score-item {
+            color: #e2e8f0; /* Світлий текст */
+        }
+        .game-score-item span {
+            color: #6366f1;
+            font-size: 1.3rem;
+            transition: color 0.3s ease;
+        }
+        body.dark-mode .game-score-item span {
+            color: #a7d9f7; /* Світліший синій */
+        }
+
+        /* Стилі для підсумків раунду */
+        #round-summary {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #e6f7ff; /* Світло-блакитний фон */
+            border-radius: 10px;
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.05);
+            text-align: center; /* Центруємо вміст, включаючи кнопку ОК */
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        body.dark-mode #round-summary {
+            background-color: #2a3340; /* Темний блакитний фон */
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);
+        }
+        #round-summary h3 {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #007bff; /* Синій заголовок */
+            margin-bottom: 15px;
+            text-align: center;
+            transition: color 0.3s ease;
+        }
+        body.dark-mode #round-summary h3 {
+            color: #7ab8ff; /* Світліший синій */
+        }
+        #words-in-round-list {
+            text-align: left; /* Слова залишаємо вирівняними по лівому краю */
+        }
+        .word-score-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px dashed #cceeff;
+            transition: border-color 0.3s ease;
+        }
+        body.dark-mode .word-score-item {
+            border-bottom: 1px dashed #3a4a5c; /* Темніша межа */
+        }
+        .word-score-item:last-child {
+            border-bottom: none;
+        }
+        .word-score-item span {
+            font-weight: bold;
+            color: #333;
+            transition: color 0.3s ease;
+        }
+        body.dark-mode .word-score-item span {
+            color: #e2e8f0; /* Світлий текст */
+        }
+        .word-score-item .score-controls button {
+            padding: 4px 8px;
+            font-size: 0.8rem;
+            margin-left: 5px;
+            border-radius: 5px;
+            box-shadow: none;
+            background-color: #6c757d; /* Сірі кнопки за замовчуванням */
+            transition: background-color 0.3s ease;
+        }
+        body.dark-mode .word-score-item .score-controls button {
+            background-color: #5a6268; /* Темніші сірі кнопки */
+        }
+        .word-score-item .score-controls button.active {
+             background-color: #007bff; /* Активна кнопка синя */
+        }
+        body.dark-mode .word-score-item .score-controls button.active {
+             background-color: #7ab8ff; /* Активна кнопка світліша синя */
+        }
+        .word-score-item .score-controls button:hover {
+            background-color: #5a6268;
+        }
+        body.dark-mode .word-score-item .score-controls button:hover {
+            background-color: #6c757d;
+        }
+        .word-score-item .current-word-score {
+            font-weight: bold;
+            margin-left: 10px;
+            min-width: 25px; /* Щоб не "стрибало" при зміні */
+            text-align: right;
+            transition: color 0.3s ease;
+        }
+        body.dark-mode .word-score-item .current-word-score {
+            color: #e2e8f0; /* Світлий текст */
+        }
+        #confirm-round-summary-btn { /* Стиль для нової кнопки ОК */
+            background-color: #4CAF50; /* Зелений */
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            cursor: pointer;
+            margin-top: 20px;
+            box-shadow: 0 4px 10px rgba(76, 175, 80, 0.3);
+        }
+        #confirm-round-summary-btn:hover {
+            background-color: #45a049;
+        }
+        /* Стиль для повідомлення "Не підглядуй" */
+        #peeking-message {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #cc0000; /* Червоний колір */
+            margin: 30px 0;
+            min-height: 100px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: #fff0f0;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: inset 0 2px 5px rgba(0,0,0,0.1);
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
+            transition: background-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease;
+        }
+        body.dark-mode #peeking-message {
+            background-color: #4a1c1c; /* Темний червоний фон */
+            color: #ff9999; /* Світліший червоний текст */
+            box-shadow: inset 0 2px 5px rgba(0,0,0,0.3);
+        }
+        #loading-message {
+            font-size: 1.5rem;
+            color: #6366f1;
+            text-align: center;
+            margin-top: 50px;
+        }
+        body.dark-mode #loading-message {
+            color: #a7d9f7;
+        }
+        .host-display-text { /* Стиль для відображення хоста */
+            font-size: 0.9rem;
+            color: #6b7280;
+            margin-top: 5px;
+            text-align: center;
+            transition: color 0.3s ease;
+        }
+        body.dark-mode .host-display-text {
+            color: #a0aec0; /* Світліший сірий */
+        }
+        #theme-toggle {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background-color: #6366f1;
+            color: white;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            cursor: pointer;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            transition: background-color 0.3s ease, transform 0.1s ease;
+        }
+        #theme-toggle:hover {
+            background-color: #4f46e5;
+            transform: scale(1.05);
+        }
+        body.dark-mode #theme-toggle {
+            background-color: #a7d9f7; /* Світліший синій для темної теми */
+            color: #2d3748; /* Темний текст */
+        }
+        body.dark-mode #theme-toggle:hover {
+            background-color: #8ac0e0;
+        }
+    </style>
+</head>
+<body>
+    <div id="app-container" class="rounded-xl shadow-lg p-8 bg-white flex flex-col gap-6">
+        <div id="loading-message">Завантаження...</div>
+
+        <!-- Кнопка перемикання теми -->
+        <button id="theme-toggle">🌙</button>
+
+        <!-- Секція для введення нікнейму -->
+        <div id="nickname-section" class="section">
+            <label for="nickname-input" class="text-gray-700 text-lg font-medium mb-2">Введіть ваш нікнейм:</label>
+            <input type="text" id="nickname-input" placeholder="Ваш нікнейм" class="rounded-lg p-3 border border-gray-300 focus:ring-2 focus:ring-indigo-500">
+            <button id="continue-btn" class="rounded-lg bg-indigo-600 text-white p-3 text-lg font-semibold hover:bg-indigo-700 transition duration-200">Продовжити</button>
+        </div>
+
+        <!-- Секція основних дій (створити/приєднатися/завантажити слова/почати гру) -->
+        <div id="main-actions-section" class="section">
+            <p class="text-gray-700 text-lg mb-4">Привіт, <span id="display-nickname" class="font-bold text-indigo-600"></span>! Оберіть дію:</p>
+            <p id="host-display-main" class="host-display-text">Хост: </p> <!-- Відображення хоста на головному екрані -->
+            <div class="flex flex-col sm:flex-row gap-4">
+                <button id="create-team-option-btn" class="flex-1 rounded-lg bg-green-600 text-white p-3 text-lg font-semibold hover:bg-green-700 transition duration-200">Створити команду</button>
+                <button id="join-team-option-btn" class="flex-1 rounded-lg bg-blue-600 text-white p-3 text-lg font-semibold hover:bg-blue-700 transition duration-200">Приєднатися до команди</button>
+            </div>
+            <button id="load-words-option-btn" class="rounded-lg bg-purple-600 text-white p-3 text-lg font-semibold hover:bg-purple-700 transition duration-200 mt-4">Завантажити слова</button>
+            <button id="start-game-btn" class="rounded-lg bg-red-600 text-white p-3 text-lg font-semibold hover:bg-red-700 transition duration-200 mt-4" disabled>Почати гру</button>
+            <button id="back-to-nickname-btn" class="rounded-lg bg-gray-500 text-white p-3 text-base font-semibold hover:bg-gray-600 transition duration-200 mt-4">Змінити нікнейм</button>
+        </div>
+
+        <!-- Секція для створення нових команд -->
+        <div id="create-team-section" class="section">
+            <label for="num-teams-input" class="text-gray-700 text-lg font-medium mb-2">Скільки команд ви хочете створити (2-5)?</label>
+            <input type="number" id="num-teams-input" min="2" max="5" value="2" class="rounded-lg p-3 border border-gray-300 focus:ring-2 focus:ring-indigo-500">
+            <button id="create-teams-btn" class="rounded-lg bg-indigo-600 text-white p-3 text-lg font-semibold hover:bg-indigo-700 transition duration-200">Створити</button>
+            <button id="back-to-main-actions-btn-from-create" class="rounded-lg bg-gray-500 text-white p-3 text-base font-semibold hover:bg-gray-600 transition duration-200">Назад</button>
+        </div>
+
+        <!-- Секція для приєднання до існуючої команди -->
+        <div id="join-team-section" class="section">
+            <label for="team-select" class="text-gray-700 text-lg font-medium mb-2">Оберіть команду для приєднання:</label>
+            <select id="team-select" class="rounded-lg p-3 border border-gray-300 focus:ring-2 focus:ring-indigo-500">
+                <!-- Опції команд будуть завантажуватися динамічно JavaScript'ом -->
+            </select>
+            <button id="join-selected-team-btn" class="rounded-lg bg-blue-600 text-white p-3 text-lg font-semibold hover:bg-blue-700 transition duration-200">Приєднатися</button>
+            <button id="back-to-main-actions-btn-from-join" class="rounded-lg bg-gray-500 text-white p-3 text-base font-semibold hover:bg-gray-600 transition duration-200">Назад</button>
+        </div>
+
+        <!-- Секція для завантаження слів -->
+        <div id="word-input-section" class="section">
+            <label for="words-textarea" class="text-gray-700 text-lg font-medium mb-2">Вставте слова для гри (одне слово на рядок):</label>
+            <textarea id="words-textarea" rows="10" placeholder="Наприклад:&#10;Яблуко&#10;Машина&#10;Сонце&#10;Книга" class="rounded-lg p-3 border border-gray-300 focus:ring-2 focus:ring-indigo-500"></textarea>
+            <button id="load-words-btn" class="rounded-lg bg-purple-600 text-white p-3 text-lg font-semibold hover:bg-purple-700 transition duration-200">Завантажити слова</button>
+            <button id="back-to-main-actions-btn-from-words" class="rounded-lg bg-gray-500 text-white p-3 text-base font-semibold hover:bg-gray-600 transition duration-200">Назад</button>
+        </div>
+
+        <!-- Блок для виведення повідомлень користувачу -->
+        <p id="message-box" class="rounded-lg p-3 text-center"></p>
+
+        <!-- Секція для відображення поточних команд та їхніх учасників -->
+        <div id="teams-display-section" class="section">
+            <h2 class="text-2xl font-bold text-gray-800 mb-4">Поточні команди:</h2>
+            <div class="teams-columns-container">
+                <div id="left-teams-list" class="team-list-column"></div>
+                <div id="right-teams-list" class="team-list-column"></div>
+            </div>
+        </div>
+
+        <!-- Ігрова секція -->
+        <div id="game-section" class="section">
+            <p id="current-team-turn-game" class="text-indigo-700 text-xl font-semibold">Хід команди: <span class="font-bold text-indigo-900"></span></p>
+            <p id="host-display-game" class="host-display-text">Хост: </p> <!-- Відображення хоста в ігровій секції -->
+            <div id="game-scores" class="flex justify-around mb-6">
+                <!-- Рахунки команд будуть тут -->
+            </div>
+            <div id="timer" class="text-red-600 text-6xl font-extrabold mb-8">60</div>
+            <div id="current-word" class="bg-blue-50 text-blue-800 text-5xl font-bold p-8 rounded-2xl shadow-md"></div>
+            <div id="peeking-message" style="display: none;">Не підглядуй, лох!</div>
+            <div class="game-buttons flex flex-col sm:flex-row gap-4">
+                <button id="correct-btn" class="flex-1 bg-green-500 text-white p-4 text-xl font-bold rounded-lg hover:bg-green-600 transition duration-200">Вірно</button>
+                <button id="skip-btn" class="flex-1 bg-orange-500 text-white p-4 text-xl font-bold rounded-lg hover:bg-orange-600 transition duration-200">Пропустити слово</button>
+            </div>
+            <div id="round-summary" style="display: none;">
+                <h3>Підсумки раунду для команди <span id="summary-team-name"></span>:</h3>
+                <div id="words-in-round-list">
+                    <!-- Слова з балами та кнопками коригування будуть тут -->
+                </div>
+                <button id="confirm-round-summary-btn" class="rounded-lg">ОК</button>
+            </div>
+            <button id="start-round-btn" class="rounded-lg bg-green-500 text-white p-3 text-lg font-semibold hover:bg-green-600 transition duration-200 mt-6">Почати раунд</button>
+            <button id="start-next-round-btn" class="rounded-lg bg-green-500 text-white p-3 text-lg font-semibold hover:bg-green-600 transition duration-200 mt-6">Почати наступний раунд</button>
+            <button id="end-game-btn" class="rounded-lg bg-red-600 text-white p-3 text-lg font-semibold hover:bg-red-700 transition duration-200 mt-6">Завершити гру</button>
+        </div>
+    </div>
+
+    <script type="module">
+        // Імпорти Firebase SDK (візьмемо з window після ініціалізації)
+        let db;
+        let auth;
+        let userId;
+        let appId;
+
+        // Отримання посилань на HTML-елементи
+        const nicknameInput = document.getElementById('nickname-input');
+        const continueBtn = document.getElementById('continue-btn');
+        const displayNickname = document.getElementById('display-nickname');
+        const nicknameSection = document.getElementById('nickname-section');
+        const mainActionsSection = document.getElementById('main-actions-section');
+        const createTeamOptionBtn = document.getElementById('create-team-option-btn');
+        const joinTeamOptionBtn = document.getElementById('join-team-option-btn');
+        const backToNicknameBtn = document.getElementById('back-to-nickname-btn');
+        const createTeamSection = document.getElementById('create-team-section');
+        const numTeamsInput = document.getElementById('num-teams-input');
+        const createTeamsBtn = document.getElementById('create-teams-btn');
+        const backToMainActionsBtnFromCreate = document.getElementById('back-to-main-actions-btn-from-create');
+        const joinTeamSection = document.getElementById('join-team-section');
+        const teamSelect = document.getElementById('team-select');
+        const joinSelectedTeamBtn = document.getElementById('join-selected-team-btn');
+        const backToMainActionsBtnFromJoin = document.getElementById('back-to-main-actions-btn-from-join');
+        const teamsDisplaySection = document.getElementById('teams-display-section');
+        const leftTeamsList = document.getElementById('left-teams-list');
+        const rightTeamsList = document.getElementById('right-teams-list');
+        const messageBox = document.getElementById('message-box');
+        const loadingMessage = document.getElementById('loading-message');
+        const themeToggle = document.getElementById('theme-toggle');
+
+
+        // Елементи для функціоналу гри
+        const loadWordsOptionBtn = document.getElementById('load-words-option-btn');
+        const wordInputSection = document.getElementById('word-input-section');
+        const wordsTextarea = document.getElementById('words-textarea');
+        const loadWordsBtn = document.getElementById('load-words-btn');
+        const backToMainActionsBtnFromWords = document.getElementById('back-to-main-actions-btn-from-words');
+        const startGameBtn = document.getElementById('start-game-btn');
+        const gameSection = document.getElementById('game-section');
+        const currentTeamTurnDisplayGame = document.getElementById('current-team-turn-game').querySelector('span');
+        const gameScoresDisplay = document.getElementById('game-scores');
+        const timerDisplay = document.getElementById('timer');
+        const currentWordDisplay = document.getElementById('current-word');
+        const peekingMessage = document.getElementById('peeking-message');
+        const correctBtn = document.getElementById('correct-btn');
+        const skipBtn = document.getElementById('skip-btn');
+        const endGameBtn = document.getElementById('end-game-btn');
+        const startRoundBtn = document.getElementById('start-round-btn');
+        const startNextRoundBtn = document.getElementById('start-next-round-btn');
+        const roundSummaryDiv = document.getElementById('round-summary');
+        const summaryTeamName = document.getElementById('summary-team-name');
+        const wordsInRoundList = document.getElementById('words-in-round-list');
+        const confirmRoundSummaryBtn = document.getElementById('confirm-round-summary-btn');
+        const hostDisplayMain = document.getElementById('host-display-main'); // Елемент для хоста на головному екрані
+        const hostDisplayGame = document.getElementById('host-display-game'); // Елемент для хоста в ігровій секції
+
+
+        // Глобальні змінні для зберігання стану гри
+        let teams = []; // Масив об'єктів команд: [{ id: 'docId', name: 'Команда 1', members: ['Гравець1'], score: 0 }]
+        let currentPlayer = { nickname: '', team: '', isHost: false }; // Нікнейм поточного гравця, його команда та чи є він хостом
+        let words = []; // Масив слів для гри (оригінальний, незмінний)
+        let shuffledWords = []; // Перемішаний масив слів для поточного геймплею
+        let currentWordIndex = 0;
+        let currentTeamIndex = 0;
+        let gameTimer = 60; // Початковий час на хід
+        let timerInterval;
+        let gameActive = false; // Чи активна гра (таймер працює)
+        let currentRoundWords = []; // Слова, показані в поточному раунді, для підсумків
+        let currentHostNickname = ''; // Нікнейм поточного хоста для відображення
+
+        const MAX_SCORE = 30; // Максимальний рахунок для перемоги
+
+        // Дефолтні тестові слова
+        const defaultWords = [
+            "Яблуко", "Машина", "Сонце", "Книга", "Дерево",
+            "Море", "Гора", "Місто", "Квітка", "Собака",
+            "Кішка", "Птах", "Риба", "Хмара", "Зірка",
+            "Дощ", "Вітер", "Сніг", "Вода", "Вогонь"
+        ];
+
+        // Посилання на колекції/документи Firestore
+        let teamsCollectionRef;
+        let gameWordsDocRef;
+        let gameSettingsDocRef; // Для зберігання загального стану гри (currentTeamIndex, currentWordIndex, gameActive)
+
+        // --- Допоміжні функції ---
+
+        /**
+         * Відображає повідомлення користувачу у спеціальному блоці.
+         * @param {string} message - Повідомлення для відображення.
+         * @param {string} type - Тип повідомлення ('success', 'error', 'info') для стилізації.
+         */
+        function showMessage(message, type = 'info') {
+            messageBox.textContent = message;
+            messageBox.className = 'rounded-lg p-3 text-center active'; // Скидаємо класи та активуємо
+            if (type === 'success') {
+                messageBox.classList.add('bg-green-100', 'text-green-800');
+            } else if (type === 'error') {
+                messageBox.classList.add('bg-red-100', 'text-red-800');
+            } else { // info
+                messageBox.classList.add('bg-blue-100', 'text-blue-800');
+            }
+            // Ховаємо повідомлення через 3 секунди
+            setTimeout(() => {
+                messageBox.classList.remove('active');
+            }, 3000);
+        }
+
+        /**
+         * Зберігає поточний стан нікнейму гравця в localStorage браузера.
+         */
+        function saveNicknameLocally() {
+            localStorage.setItem('aliasNickname', currentPlayer.nickname);
+        }
+
+        /**
+         * Завантажує стан команд, гравця та слів з Firestore.
+         */
+        async function loadState() {
+            db = window.db;
+            auth = window.auth;
+            userId = window.userId;
+            appId = window.appId;
+
+            if (!db || !auth || !userId) {
+                console.error("Firebase not fully initialized.");
+                return;
+            }
+
+            teamsCollectionRef = collection(db, `artifacts/${appId}/public/data/teams`);
+            gameWordsDocRef = doc(db, `artifacts/${appId}/public/data/gameWords`);
+            gameSettingsDocRef = doc(db, `artifacts/${appId}/public/data/gameSettings`);
+
+            // Завантажуємо нікнейм з localStorage
+            const savedNickname = localStorage.getItem('aliasNickname');
+            if (savedNickname) {
+                currentPlayer.nickname = savedNickname;
+                displayNickname.textContent = savedNickname;
+            }
+
+            // Слухаємо зміни команд в реальному часі
+            onSnapshot(teamsCollectionRef, (snapshot) => {
+                teams = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderTeams();
+                checkGameReadiness();
+            }, (error) => {
+                console.error("Error listening to teams:", error);
+                showMessage("Помилка завантаження команд.", "error");
+            });
+
+            // Слухаємо зміни слів в реальному часі
+            onSnapshot(gameWordsDocRef, async (docSnap) => {
+                if (docSnap.exists()) {
+                    words = docSnap.data().words || [];
+                    shuffledWords = docSnap.data().shuffledWords || [];
+                    currentWordIndex = docSnap.data().currentWordIndex || 0;
+                } else {
+                    words = [...defaultWords]; // Встановлюємо дефолтні слова, якщо документа немає
+                    shuffledWords = shuffleArray([...words]);
+                    await setDoc(gameWordsDocRef, { words: words, shuffledWords: shuffledWords, currentWordIndex: 0 });
+                }
+                checkGameReadiness();
+            }, (error) => {
+                console.error("Error listening to words:", error);
+                showMessage("Помилка завантаження слів.", "error");
+            });
+
+            // Слухаємо зміни налаштувань гри (для синхронізації стану раунду та хоста)
+            onSnapshot(gameSettingsDocRef, async (docSnap) => {
+                if (docSnap.exists()) {
+                    const settings = docSnap.data();
+                    currentTeamIndex = settings.currentTeamIndex || 0;
+                    gameActive = settings.gameActive || false;
+                    currentPlayer.isHost = (settings.hostId === userId); // Оновлюємо статус хоста
+                    currentHostNickname = settings.hostNickname || 'Невідомий'; // Оновлюємо нікнейм хоста
+
+                    // Якщо хост ще не встановлений і поточний користувач має нікнейм, робимо його хостом
+                    if (!settings.hostId && currentPlayer.nickname && userId) {
+                        await updateDoc(gameSettingsDocRef, { hostId: userId, hostNickname: currentPlayer.nickname });
+                        currentPlayer.isHost = true;
+                        currentHostNickname = currentPlayer.nickname;
+                    }
+
+                    // Логіка запуску/зупинки таймера
+                    if (gameActive && document.getElementById('game-section').classList.contains('active') && currentPlayer.isHost) {
+                         // Тільки хост запускає таймер
+                        if (!timerInterval) { // Запускаємо, тільки якщо таймер неактивний
+                            startTurnTimer();
+                        }
+                    } else if (!gameActive) {
+                        clearInterval(timerInterval);
+                        timerInterval = null; // Очищаємо інтервал
+                    }
+
+                    // Оновлюємо відображення поточної команди
+                    if (teams[currentTeamIndex]) {
+                        currentTeamTurnDisplayGame.textContent = teams[currentTeamIndex].name;
+                    }
+                    renderGameScores();
+
+                    // Якщо gameActive false, але ми в ігровій секції, є слова в поточному раунді, і підсумки не відображаються
+                    // Значить, раунд завершився і треба показати підсумки
+                    if (!gameActive && document.getElementById('game-section').classList.contains('active') && currentRoundWords.length > 0 && roundSummaryDiv.style.display !== 'block') {
+                         showRoundSummary();
+                    }
+
+                    updateHostUI(); // Оновлюємо UI відповідно до статусу хоста
+                } else {
+                    // Ініціалізуємо налаштування гри, якщо їх немає
+                    // Це відбувається при першому завантаженні сторінки
+                    if (currentPlayer.nickname && userId) { // Тільки якщо нікнейм вже введено
+                        await setDoc(gameSettingsDocRef, { currentTeamIndex: 0, gameActive: false, hostId: userId, hostNickname: currentPlayer.nickname });
+                        currentPlayer.isHost = true;
+                        currentHostNickname = currentPlayer.nickname;
+                    } else {
+                        // Якщо нікнейм ще не введено, ініціалізуємо без хоста
+                        await setDoc(gameSettingsDocRef, { currentTeamIndex: 0, gameActive: false, hostId: null, hostNickname: null });
+                    }
+                    updateHostUI();
+                }
+            }, (error) => {
+                console.error("Error listening to game settings:", error);
+                showMessage("Помилка завантаження налаштувань гри.", "error");
+            });
+
+            // Показуємо відповідну секцію після завантаження даних
+            if (savedNickname) {
+                showSection('main-actions-section');
+            } else {
+                showSection('nickname-section');
+            }
+            applySavedTheme(); // Застосовуємо збережену тему
+        }
+
+        /**
+         * Оновлює елементи UI залежно від того, чи є поточний користувач хостом.
+         */
+        function updateHostUI() {
+            // Оновлюємо відображення хоста
+            hostDisplayMain.textContent = `Хост: ${currentHostNickname}`;
+            hostDisplayGame.textContent = `Хост: ${currentHostNickname}`;
+
+            // Кнопки, доступні тільки хосту
+            startGameBtn.disabled = !currentPlayer.isHost;
+            startGameBtn.title = currentPlayer.isHost ? '' : 'Тільки хост може почати гру.';
+
+            startRoundBtn.disabled = !currentPlayer.isHost;
+            startRoundBtn.title = currentPlayer.isHost ? '' : 'Тільки хост може почати раунд.';
+
+            startNextRoundBtn.disabled = !currentPlayer.isHost;
+            startNextRoundBtn.title = currentPlayer.isHost ? '' : 'Тільки хост може почати наступний раунд.';
+
+            confirmRoundSummaryBtn.disabled = !currentPlayer.isHost;
+            confirmRoundSummaryBtn.title = currentPlayer.isHost ? '' : 'Тільки хост може підтвердити підсумки.';
+
+            correctBtn.disabled = !currentPlayer.isHost;
+            correctBtn.title = currentPlayer.isHost ? '' : 'Тільки хост може відмічати слова.';
+
+            skipBtn.disabled = !currentPlayer.isHost;
+            skipBtn.title = currentPlayer.isHost ? '' : 'Тільки хост може пропускати слова.';
+
+            endGameBtn.disabled = !currentPlayer.isHost;
+            endGameBtn.title = currentPlayer.isHost ? '' : 'Тільки хост може завершити гру.';
+        }
+
+
+        /**
+         * Ховає всі секції, окрім teams-display-section, та відображає вказану.
+         * @param {string} sectionId - ID секції, яку потрібно відобразити.
+         */
+        function showSection(sectionId) {
+            document.querySelectorAll('.section').forEach(section => {
+                section.classList.remove('active');
+            });
+
+            document.getElementById(sectionId).classList.add('active');
+
+            if (sectionId !== 'nickname-section') {
+                teamsDisplaySection.classList.add('active');
+            } else {
+                teamsDisplaySection.classList.remove('active');
+            }
+        }
+
+        /**
+         * Відображає поточні команди та їхніх учасників в UI.
+         */
+        function renderTeams() {
+            leftTeamsList.innerHTML = ''; // Очищаємо обидва списки
+            rightTeamsList.innerHTML = '';
+
+            if (teams.length === 0) {
+                leftTeamsList.innerHTML = '<p class="text-gray-500 text-center col-span-full">Наразі немає команд. Створіть нову!</p>';
+                joinTeamOptionBtn.disabled = true;
+                startGameBtn.disabled = true;
+                return;
+            }
+            joinTeamOptionBtn.disabled = false;
+
+            teams.forEach((team, index) => {
+                const teamCard = document.createElement('div');
+                teamCard.className = 'team-card rounded-lg p-4 bg-indigo-100 shadow-md';
+                teamCard.innerHTML = `
+                    <h3 class="text-xl font-bold text-indigo-800 mb-2">${team.name} <span class="text-lg text-indigo-600">(${team.score} балів)</span></h3>
+                    <ul class="list-none p-0 m-0">
+                        ${team.members.length > 0 ?
+                            team.members.map(member => `<li class="bg-indigo-200 text-indigo-900 px-3 py-1 rounded-md mb-1">${member}</li>`).join('') :
+                            '<li class="text-indigo-600">Поки що немає гравців</li>'
+                        }
+                    </ul>
+                `;
+                if (index % 2 === 0) { // Розподіляємо команди по лівій та правій колонках
+                    leftTeamsList.appendChild(teamCard);
+                } else {
+                    rightTeamsList.appendChild(teamCard);
+                }
+            });
+            checkGameReadiness();
+            renderGameScores(); // Завжди оновлюємо рахунки після рендерингу команд
+        }
+
+        /**
+         * Заповнює випадаючий список для вибору команди.
+         */
+        function populateTeamSelect() {
+            teamSelect.innerHTML = '<option value="">Оберіть команду...</option>';
+            teams.forEach((team, index) => {
+                const option = document.createElement('option');
+                option.value = team.id; // Використовуємо ID документа Firestore
+                option.textContent = `${team.name} (${team.members.length} гравців)`;
+                teamSelect.appendChild(option);
+            });
+            joinSelectedTeamBtn.disabled = true;
+            teamSelect.addEventListener('change', () => {
+                joinSelectedTeamBtn.disabled = teamSelect.value === '';
+            });
+        }
+
+        /**
+         * Перевіряє, чи достатньо команд та слів для початку гри.
+         * Вмикає/вимикає кнопку "Почати гру".
+         */
+        function checkGameReadiness() {
+            const hasEnoughTeams = teams.length >= 1 && teams.every(team => team.members.length > 0);
+            const hasWords = words.length > 0;
+            startGameBtn.disabled = !(hasEnoughTeams && hasWords) || !currentPlayer.isHost; // Додано перевірку хоста
+            if (!hasEnoughTeams) {
+                startGameBtn.title = 'Для початку гри потрібна мінімум 1 команда, і в ній має бути хоча б один гравець.';
+            } else if (!hasWords) {
+                startGameBtn.title = 'Для початку гри потрібно завантажити слова.';
+            } else if (!currentPlayer.isHost) {
+                startGameBtn.title = 'Тільки хост може почати гру.';
+            }
+            else {
+                startGameBtn.title = '';
+            }
+        }
+
+        /**
+         * Перемішує масив слів.
+         * @param {Array} array - Масив для перемішування.
+         * @returns {Array} Перемішаний масив.
+         */
+        function shuffleArray(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+            return array;
+        }
+
+        /**
+         * Оновлює відображення балів команд під час гри.
+         */
+        function renderGameScores() {
+            gameScoresDisplay.innerHTML = '';
+            teams.forEach(team => {
+                const scoreItem = document.createElement('div');
+                scoreItem.className = 'game-score-item';
+                scoreItem.innerHTML = `${team.name}: <span>${team.score}</span>`;
+                gameScoresDisplay.appendChild(scoreItem);
+            });
+        }
+
+        /**
+         * Готує UI для початку нового раунду (показує кнопку "Почати раунд").
+         */
+        async function prepareForTurn() {
+            clearInterval(timerInterval);
+            gameActive = false;
+            await updateDoc(gameSettingsDocRef, { gameActive: false }); // Оновлюємо стан гри у Firestore
+
+            currentWordDisplay.style.display = 'none';
+            peekingMessage.style.display = 'flex';
+            correctBtn.style.display = 'none';
+            skipBtn.style.display = 'none';
+            roundSummaryDiv.style.display = 'none';
+            startNextRoundBtn.style.display = 'none';
+            confirmRoundSummaryBtn.style.display = 'none';
+
+            // Переходимо до наступної команди, яка має гравців
+            let originalTeamIndex = currentTeamIndex;
+            do {
+                currentTeamIndex = (currentTeamIndex + 1) % teams.length;
+                if (teams[currentTeamIndex].members.length > 0) {
+                    break;
+                }
+            } while (currentTeamIndex !== originalTeamIndex);
+
+            if (teams[currentTeamIndex].members.length === 0) {
+                showMessage('Немає команд з гравцями. Гра завершена.', 'error');
+                endGame();
+                return;
+            }
+
+            // Оновлюємо індекс поточної команди у Firestore
+            await updateDoc(gameSettingsDocRef, { currentTeamIndex: currentTeamIndex });
+
+            currentTeamTurnDisplayGame.textContent = teams[currentTeamIndex].name;
+            timerDisplay.textContent = '60';
+            timerDisplay.classList.remove('text-red-600');
+
+            startRoundBtn.style.display = 'block';
+            renderGameScores();
+        }
+
+        /**
+         * Запускає таймер раунду.
+         */
+        function startTurnTimer() {
+            clearInterval(timerInterval); // Зупиняємо попередній таймер, якщо він був
+            gameTimer = 60; // Скидаємо таймер
+            timerDisplay.textContent = gameTimer;
+            timerDisplay.classList.remove('text-red-600');
+
+            timerInterval = setInterval(() => {
+                gameTimer--;
+                timerDisplay.textContent = gameTimer;
+                if (gameTimer <= 10) {
+                    timerDisplay.classList.add('text-red-600');
+                } else {
+                    timerDisplay.classList.remove('text-red-600');
+                }
+
+                if (gameTimer <= 0) {
+                    clearInterval(timerInterval);
+                    gameActive = false;
+                    updateDoc(gameSettingsDocRef, { gameActive: false }); // Оновлюємо стан гри у Firestore
+                    showMessage(`Час вийшов для ${teams[currentTeamIndex].name}! Перегляньте підсумки раунду.`, 'info');
+                    showRoundSummary();
+                }
+            }, 1000);
+        }
+
+
+        /**
+         * Починає новий хід для поточної команди.
+         */
+        async function startTurn() {
+            if (!currentPlayer.isHost) {
+                showMessage('Тільки хост може почати раунд.', 'error');
+                return;
+            }
+
+            gameActive = true;
+            await updateDoc(gameSettingsDocRef, { gameActive: true }); // Оновлюємо стан гри у Firestore
+
+            startRoundBtn.style.display = 'none';
+            startNextRoundBtn.style.display = 'none';
+            roundSummaryDiv.style.display = 'none';
+            confirmRoundSummaryBtn.style.display = 'none';
+
+            peekingMessage.style.display = 'none';
+            currentWordDisplay.style.display = 'flex';
+            correctBtn.style.display = 'block';
+            skipBtn.style.display = 'block';
+
+            currentRoundWords = []; // Очищаємо слова попереднього раунду
+
+            const currentTeam = teams[currentTeamIndex];
+            currentTeamTurnDisplayGame.textContent = currentTeam.name;
+            
+            displayNextWord(); // Показуємо перше слово для цього ходу
+            renderGameScores();
+
+            startTurnTimer(); // Запускаємо таймер
+        }
+
+        /**
+         * Відображає наступне слово з перемішаного списку.
+         */
+        async function displayNextWord() {
+            if (currentWordIndex < shuffledWords.length) {
+                currentWordDisplay.textContent = shuffledWords[currentWordIndex];
+                currentWordIndex++;
+                await updateDoc(gameWordsDocRef, { currentWordIndex: currentWordIndex });
+            } else {
+                // Слова закінчилися, гра завершується
+                clearInterval(timerInterval);
+                gameActive = false;
+                await updateDoc(gameSettingsDocRef, { gameActive: false });
+                showMessage('Усі слова закінчилися! Гра завершена.', 'info');
+                endGame();
+            }
+        }
+
+        /**
+         * Обробляє правильне відгадування слова.
+         */
+        async function handleCorrect() {
+            if (!gameActive || !currentPlayer.isHost) return; // Тільки хост може відмічати
+            const word = currentWordDisplay.textContent;
+            const currentTeam = teams[currentTeamIndex];
+            currentTeam.score++;
+            currentRoundWords.push({ word: word, score: 1 });
+            await updateDoc(doc(db, `artifacts/${appId}/public/data/teams`, currentTeam.id), { score: currentTeam.score });
+
+            if (currentTeam.score >= MAX_SCORE) {
+                showMessage(`${currentTeam.name} перемогла!`, 'success');
+                endGame();
+                return;
+            }
+            renderGameScores();
+            displayNextWord();
+        }
+
+        /**
+         * Обробляє пропуск слова.
+         */
+        async function handleSkip() {
+            if (!gameActive || !currentPlayer.isHost) return; // Тільки хост може пропускати
+            const word = currentWordDisplay.textContent;
+            const currentTeam = teams[currentTeamIndex];
+            currentTeam.score--;
+            currentRoundWords.push({ word: word, score: -1 });
+            await updateDoc(doc(db, `artifacts/${appId}/public/data/teams`, currentTeam.id), { score: currentTeam.score });
+
+            renderGameScores();
+            displayNextWord();
+        }
+
+        /**
+         * Відображає підсумки поточного раунду.
+         */
+        function showRoundSummary() {
+            clearInterval(timerInterval);
+            gameActive = false;
+
+            currentWordDisplay.style.display = 'none';
+            peekingMessage.style.display = 'none';
+            correctBtn.style.display = 'none';
+            skipBtn.style.display = 'none';
+            startNextRoundBtn.style.display = 'none';
+            startRoundBtn.style.display = 'none';
+
+            roundSummaryDiv.style.display = 'block';
+            confirmRoundSummaryBtn.style.display = 'block';
+
+            summaryTeamName.textContent = teams[currentTeamIndex].name;
+            wordsInRoundList.innerHTML = '';
+
+            if (currentRoundWords.length === 0) {
+                wordsInRoundList.innerHTML = '<p class="text-gray-600 text-center">У цьому раунді слів не було.</p>';
+                return;
+            }
+
+            currentRoundWords.forEach((item, index) => {
+                const wordItem = document.createElement('div');
+                wordItem.className = 'word-score-item';
+                wordItem.innerHTML = `
+                    <span>${item.word}</span>
+                    <div class="score-controls flex items-center">
+                        <span id="score-display-${index}" class="current-word-score">${item.score}</span>
+                        <button data-index="${index}" data-score="-1" class="${item.score === -1 ? 'active' : ''}" ${!currentPlayer.isHost ? 'disabled' : ''}>-1</button>
+                        <button data-index="${index}" data-score="0" class="${item.score === 0 ? 'active' : ''}" ${!currentPlayer.isHost ? 'disabled' : ''}>0</button>
+                        <button data-index="${index}" data-score="1" class="${item.score === 1 ? 'active' : ''}" ${!currentPlayer.isHost ? 'disabled' : ''}>+1</button>
+                    </div>
+                `;
+                wordsInRoundList.appendChild(wordItem);
+
+                wordItem.querySelectorAll('.score-controls button').forEach(button => {
+                    button.addEventListener('click', async (event) => {
+                        if (!currentPlayer.isHost) { // Тільки хост може коригувати бали
+                            showMessage('Тільки хост може коригувати бали.', 'error');
+                            return;
+                        }
+
+                        const btn = event.target;
+                        const wordIdx = parseInt(btn.dataset.index);
+                        const newScore = parseInt(btn.dataset.score);
+
+                        const oldScore = currentRoundWords[wordIdx].score;
+                        const scoreDifference = newScore - oldScore;
+
+                        currentRoundWords[wordIdx].score = newScore;
+                        const currentTeam = teams[currentTeamIndex];
+                        currentTeam.score += scoreDifference;
+
+                        await updateDoc(doc(db, `artifacts/${appId}/public/data/teams`, currentTeam.id), { score: currentTeam.score });
+
+                        document.getElementById(`score-display-${wordIdx}`).textContent = newScore;
+
+                        btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+                        btn.classList.add('active');
+
+                        renderGameScores();
+                    });
+                });
+            });
+        }
+
+        /**
+         * Приховує підсумки раунду та показує кнопку "Почати наступний раунд".
+         */
+        function confirmRoundSummary() {
+            if (!currentPlayer.isHost) {
+                showMessage('Тільки хост може підтвердити підсумки раунду.', 'error');
+                return;
+            }
+            roundSummaryDiv.style.display = 'none';
+            confirmRoundSummaryBtn.style.display = 'none';
+            // Після підтвердження підсумків, готуємо UI для наступного ходу (який покаже startRoundBtn)
+            prepareForTurn();
+        }
+
+
+        /**
+         * Завершує поточну гру.
+         */
+        async function endGame() {
+            if (!currentPlayer.isHost) {
+                showMessage('Тільки хост може завершити гру.', 'error');
+                return;
+            }
+            clearInterval(timerInterval);
+            gameActive = false;
+            await updateDoc(gameSettingsDocRef, { gameActive: false, currentTeamIndex: 0 });
+            await updateDoc(gameWordsDocRef, { shuffledWords: shuffleArray([...words]), currentWordIndex: 0 });
+
+            // Скидаємо рахунки всіх команд у Firestore
+            for (const team of teams) {
+                await updateDoc(doc(db, `artifacts/${appId}/public/data/teams`, team.id), { score: 0 });
+            }
+
+            renderTeams();
+            showSection('main-actions-section');
+            showMessage('Гра завершена. Рахунки скинуто.', 'info');
+            currentWordDisplay.textContent = '';
+            peekingMessage.style.display = 'none';
+            timerDisplay.textContent = '60';
+            startRoundBtn.style.display = 'none';
+            startNextRoundBtn.style.display = 'none';
+            roundSummaryDiv.style.display = 'none';
+            confirmRoundSummaryBtn.style.display = 'none';
+        }
+
+        // --- Обробники подій ---
+
+        continueBtn.addEventListener('click', () => {
+            const nickname = nicknameInput.value.trim();
+            if (nickname) {
+                currentPlayer.nickname = nickname;
+                saveNicknameLocally(); // Зберігаємо нікнейм локально
+                displayNickname.textContent = nickname;
+                showSection('main-actions-section');
+                // При першому вході, якщо хост ще не визначений, поточний користувач стане хостом
+                // Це буде оброблено в onSnapshot для gameSettingsDocRef
+            } else {
+                showMessage('Будь ласка, введіть ваш нікнейм.', 'error');
+            }
+        });
+
+        createTeamOptionBtn.addEventListener('click', () => {
+            showSection('create-team-section');
+            numTeamsInput.value = Math.max(2, Math.min(5, teams.length > 0 ? teams.length : 2));
+        });
+
+        joinTeamOptionBtn.addEventListener('click', () => {
+            if (teams.length === 0) {
+                showMessage('Наразі немає команд для приєднання. Будь ласка, створіть команду спочатку.', 'error');
+                return;
+            }
+            populateTeamSelect();
+            showSection('join-team-section');
+        });
+
+        backToNicknameBtn.addEventListener('click', async () => {
+            if (currentPlayer.nickname && currentPlayer.team) {
+                const teamToUpdate = teams.find(team => team.name === currentPlayer.team);
+                if (teamToUpdate) {
+                    const updatedMembers = teamToUpdate.members.filter(member => member !== currentPlayer.nickname);
+                    await updateDoc(doc(db, `artifacts/${appId}/public/data/teams`, teamToUpdate.id), { members: updatedMembers });
+                }
+            }
+            localStorage.removeItem('aliasNickname'); // Видаляємо нікнейм з локального сховища
+            currentPlayer.nickname = '';
+            currentPlayer.team = '';
+            // Якщо поточний користувач був хостом, скидаємо хоста у Firestore
+            if (currentPlayer.isHost) {
+                await updateDoc(gameSettingsDocRef, { hostId: null, hostNickname: null });
+                currentPlayer.isHost = false;
+                currentHostNickname = '';
+            }
+            renderTeams();
+            showSection('nickname-section');
+        });
+
+        backToMainActionsBtnFromCreate.addEventListener('click', () => {
+            showSection('main-actions-section');
+        });
+
+        backToMainActionsBtnFromJoin.addEventListener('click', () => {
+            showSection('main-actions-section');
+        });
+
+        backToMainActionsBtnFromWords.addEventListener('click', () => {
+            showSection('main-actions-section');
+        });
+
+        createTeamsBtn.addEventListener('click', async () => {
+            if (!currentPlayer.isHost) {
+                showMessage('Тільки хост може створювати команди.', 'error');
+                return;
+            }
+
+            const numTeams = parseInt(numTeamsInput.value);
+            if (isNaN(numTeams) || numTeams < 2 || numTeams > 5) {
+                showMessage('Будь ласка, введіть число від 2 до 5.', 'error');
+                return;
+            }
+
+            // Видаляємо всі існуючі команди перед створенням нових
+            const existingTeamsSnapshot = await getDocs(teamsCollectionRef);
+            for (const teamDoc of existingTeamsSnapshot.docs) {
+                await deleteDoc(doc(db, `artifacts/${appId}/public/data/teams`, teamDoc.id));
+            }
+
+            const newTeamsData = [];
+            for (let i = 1; i <= numTeams; i++) {
+                const newTeam = { name: `Команда ${i}`, members: [], score: 0 };
+                newTeam.members.push(`Бот ${i}-1`);
+                newTeam.members.push(`Бот ${i}-2`);
+                newTeamsData.push(newTeam);
+            }
+
+            // Додаємо нові команди до Firestore
+            for (const teamData of newTeamsData) {
+                await addDoc(teamsCollectionRef, teamData);
+            }
+
+            // Призначаємо поточного гравця до першої команди, якщо він є
+            if (currentPlayer.nickname) {
+                // Оновлюємо локальний стан `teams` після додавання команд
+                const updatedTeamsSnapshot = await getDocs(teamsCollectionRef);
+                teams = updatedTeamsSnapshot.docs.map(teamDoc => ({ id: teamDoc.id, ...teamDoc.data() }));
+
+                const firstTeam = teams[0];
+                if (firstTeam && !firstTeam.members.includes(currentPlayer.nickname)) {
+                    const updatedMembers = [...firstTeam.members, currentPlayer.nickname];
+                    await updateDoc(doc(db, `artifacts/${appId}/public/data/teams`, firstTeam.id), { members: updatedMembers });
+                    currentPlayer.team = firstTeam.name;
+                    showMessage(`Створено ${numTeams} команд! ${currentPlayer.nickname} приєднався до ${firstTeam.name}.`, 'success');
+                } else {
+                    showMessage(`Створено ${numTeams} команд!`, 'success');
+                }
+            } else {
+                showMessage(`Створено ${numTeams} команд! Будь ласка, введіть нікнейм, щоб приєднатися.`, 'info');
+            }
+            renderTeams();
+            showSection('main-actions-section');
+        });
+
+        joinSelectedTeamBtn.addEventListener('click', async () => {
+            const selectedTeamId = teamSelect.value;
+            if (selectedTeamId === '') {
+                showMessage('Будь ласка, оберіть команду.', 'error');
+                return;
+            }
+
+            if (currentPlayer.nickname) {
+                // Видаляємо гравця з попередньої команди у Firestore, якщо він був у ній
+                if (currentPlayer.team) {
+                    const prevTeam = teams.find(team => team.id === currentPlayer.team);
+                    if (prevTeam) {
+                        const updatedMembers = prevTeam.members.filter(member => member !== currentPlayer.nickname);
+                        await updateDoc(doc(db, `artifacts/${appId}/public/data/teams`, prevTeam.id), { members: updatedMembers });
+                    }
+                }
+
+                // Додаємо гравця до нової команди у Firestore
+                const selectedTeam = teams.find(team => team.id === selectedTeamId);
+                if (selectedTeam) {
+                    const updatedMembers = [...selectedTeam.members, currentPlayer.nickname];
+                    await updateDoc(doc(db, `artifacts/${appId}/public/data/teams`, selectedTeam.id), { members: updatedMembers });
+                    currentPlayer.team = selectedTeam.name;
+                    showMessage(`${currentPlayer.nickname} приєднався до ${selectedTeam.name}!`, 'success');
+                }
+            } else {
+                showMessage('Будь ласка, введіть нікнейм, перш ніж приєднуватися до команди.', 'error');
+            }
+
+            renderTeams();
+            showSection('main-actions-section');
+        });
+
+        loadWordsOptionBtn.addEventListener('click', () => {
+            showSection('word-input-section');
+            wordsTextarea.value = words.join('\n');
+        });
+
+        loadWordsBtn.addEventListener('click', async () => {
+            if (!currentPlayer.isHost) {
+                showMessage('Тільки хост може завантажувати слова.', 'error');
+                return;
+            }
+
+            const rawWords = wordsTextarea.value.split('\n').map(word => word.trim()).filter(word => word.length > 0);
+            if (rawWords.length === 0) {
+                showMessage('Будь ласка, введіть хоча б одне слово.', 'error');
+                return;
+            }
+            words = rawWords;
+            shuffledWords = shuffleArray([...words]); // Перемішуємо слова при завантаженні
+            currentWordIndex = 0;
+            try {
+                await setDoc(gameWordsDocRef, { words: words, shuffledWords: shuffledWords, currentWordIndex: currentWordIndex });
+                showMessage(`Завантажено ${words.length} слів!`, 'success');
+            } catch (e) {
+                console.error("Error writing words to Firestore:", e);
+                showMessage("Помилка завантаження слів у хмару.", "error");
+            }
+            showSection('main-actions-section');
+            checkGameReadiness();
+        });
+
+        // Обробник для кнопки "Почати гру" (ініціює підготовку до першого раунду)
+        startGameBtn.addEventListener('click', async () => {
+            if (!currentPlayer.isHost) {
+                showMessage('Тільки хост може почати гру.', 'error');
+                return;
+            }
+
+            if (!gameActive) {
+                if (teams.length < 1 || teams.some(team => team.members.length === 0)) {
+                    showMessage('Для початку гри потрібна мінімум 1 команда, і в ній має бути хоча б один гравець.', 'error');
+                    return;
+                }
+                if (words.length === 0) {
+                    showMessage('Будь ласка, завантажте слова для гри.', 'error');
+                    return;
+                }
+
+                // Скидаємо рахунки всіх команд у Firestore перед початком нової гри
+                for (const team of teams) {
+                    await updateDoc(doc(db, `artifacts/${appId}/public/data/teams`, team.id), { score: 0 });
+                }
+                // Перемішуємо слова та скидаємо індекс слова у Firestore
+                shuffledWords = shuffleArray([...words]);
+                currentWordIndex = 0;
+                await updateDoc(gameWordsDocRef, { shuffledWords: shuffledWords, currentWordIndex: currentWordIndex });
+
+                currentTeamIndex = -1; // Щоб prepareForTurn() почав з Команди 1 (індекс 0)
+                gameActive = false; // Забезпечуємо, що гра неактивна до початку раунду
+                await updateDoc(gameSettingsDocRef, { currentTeamIndex: currentTeamIndex, gameActive: gameActive }); // Оновлюємо Firestore
+
+                showSection('game-section');
+                prepareForTurn();
+            }
+        });
+
+        // Обробники кнопок гри
+        correctBtn.addEventListener('click', handleCorrect);
+        skipBtn.addEventListener('click', handleSkip);
+        endGameBtn.addEventListener('click', endGame);
+        startRoundBtn.addEventListener('click', startTurn);
+        startNextRoundBtn.addEventListener('click', startTurn);
+        confirmRoundSummaryBtn.addEventListener('click', confirmRoundSummary);
+
+        // --- Функціонал темної теми ---
+        function applySavedTheme() {
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme === 'dark') {
+                document.body.classList.add('dark-mode');
+                themeToggle.textContent = '☀️'; // Іконка сонця для світлої теми
+            } else {
+                document.body.classList.remove('dark-mode');
+                themeToggle.textContent = '🌙'; // Іконка місяця для темної теми
+            }
+        }
+
+        themeToggle.addEventListener('click', () => {
+            document.body.classList.toggle('dark-mode');
+            if (document.body.classList.contains('dark-mode')) {
+                localStorage.setItem('theme', 'dark');
+                themeToggle.textContent = '☀️';
+            } else {
+                localStorage.setItem('theme', 'light');
+                themeToggle.textContent = '🌙';
+            }
+        });
+
+        // Початкове завантаження стану гри та теми при завантаженні сторінки
+        // Цей виклик тепер відбувається після ініціалізації Firebase в onAuthStateChanged
+        // document.addEventListener('DOMContentLoaded', loadState); // Закоментовано, оскільки loadState викликається в onAuthStateChanged
+        document.addEventListener('DOMContentLoaded', applySavedTheme); // Застосовуємо тему при завантаженні DOM
+    </script>
+</body>
+</html>
